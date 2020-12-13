@@ -216,16 +216,12 @@ contract Reserve2 {
     // https://github.com/dapphub/ds-dach/blob/49a3ccfd5d44415455441feeb2f5a39286b8de71/src/dach.sol
     TokenLike public constant DAI = TokenLike(0x6B175474E89094C44Da98b954EedeAC495271d0F);
 
-    struct Pledger {
-        address addr;
-        uint256 value;
-    }
-
     struct Campaign {
         uint256 totalPledged;
         uint256 numPledgers;
         uint256 treeSold;
-        mapping (uint => Pledger) pledgers;
+        mapping (uint256 => address) pledgers;
+        mapping (address => uint256) valuesPledged;
     }
 
     uint256 private numCampaigns = 1;
@@ -257,15 +253,18 @@ contract Reserve2 {
         // add value to total pledged
         c.totalPledged = c.totalPledged + _value;
 
-        // Add value to msg.sender
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
         if (pledgerId == 0) {
             // user has not pledged before
             pledgerId = c.numPledgers++;
-            
-            Pledger 
+            c.pledgers[pledgerId] = msg.sender;
+            c.valuesPledged[msg.sender] = _value;
+        } else {
+            // user has pledged before
+            c.valuesPledged[msg.sender] = c.valuesPledged[msg.sender].add(_value);
         }
 
+        // TODO: handle plege token
 
         emit Pledge(numCampaigns, msg.sender, _value);
 
@@ -276,19 +275,12 @@ contract Reserve2 {
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
         require(pledgerId != 0, "User has not pledged.");
+        require(_value <= c.valuesPledged[msg.sender], "Cannot unpledge more than already pledged.");
 
-        Pledger storage p = c.pledgers[pledgerId];
-        require(_value <= p.value, "Cannot unpledge more than pledged.");
-
-        // deduct value from total pledged
         c.totalPledged = c.totalPledged.sub(_value);
+        c.valuesPledged[msg.sender] = c.valuesPledged.sub(_value);
 
-        // deduct value from msg.sender
-
-
-        // c.amount[msg.sender] = c.amount[msg.sender].sub(_value);
-
-        // TODO: handle unpledge
+        // TODO: handle unpledge token
 
         emit Unpledge(numCampaigns, msg.sender, _value);
     }
@@ -298,8 +290,8 @@ contract Reserve2 {
 
         uint256 pledgerId;
         for (uint i=1; i < c.numPledgers+1; i++) {
-            Pledger storage p = c.pledgers[i];
-            if (p.addr == _addr) {
+            address pledger = c.pledgers[i];
+            if (pledger == _addr) {
                 pledgerId = i;
                 break;
             }
