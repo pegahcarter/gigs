@@ -135,7 +135,7 @@ contract Reserve2 {
         emit Unpledge(numCampaigns, msg.sender, _amount);
     }
 
-    function reserveTransfer(address _token, address _to) external {
+    function reserveTransfer(address _token, address _to) external payable {
         require(msg.sender == gov, "UniswapRouter: not gov");
         amount = IERC20(_token).balanceOf(address(this));
         IERC20(_token).transfer(_to, amount);
@@ -144,7 +144,6 @@ contract Reserve2 {
 
     function getPledgerId(uint256 _numCampaign, address _addr) private returns (uint256 pledgerId) {
         Campaign storage c = campaigns[_numCampaign];
-
         pledgerId = 0;
         for (uint i=1; i < c.numPledgers+1; i++) {
             address pledger = c.pledgers[i];
@@ -160,9 +159,15 @@ contract Reserve2 {
         return c.totalPledged;
     }
 
-    function getPledgers(uint256 _numCampaign) external view returns ([]address calldata pledgers) {
+    function hasPledged(uint256 _numCampaign, address _addr) external view returns (bool pledged) {
         Campaign storage c = campaigns[_numCampaign];
-        pledgers = c.pledgers;
+        pledged = false;
+        for (i=1;i<c.numPledgers;i++) {
+            if (c.pledgers[i] == _addr) {
+                pledged = true;
+                break;
+            }
+        }
     }
 
     function getPledgeAmount(uint256 _numCampaign, address _addr) external view returns (uint256) {
