@@ -1,6 +1,7 @@
 pragma solidity ^0.6.6;
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 
 // TODO: will need to update uniswapPair in TREEReserve to reflect TREE/DAI
 
@@ -27,12 +28,9 @@ contract Reserve2 {
     event Rebase(uint256 _id);
     event ReserveTransfer(address _token, address _to, uint256 _amount);
 
-    // https://github.com/dapphub/ds-dach/blob/49a3ccfd5d44415455441feeb2f5a39286b8de71/src/dach.sol
     address constant public DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
-
-    // https://github.com/Uniswap/uniswap-v2-core/blob/4dd59067c76dea4a0e8e4bfdda41877a6b16dedc/contracts/UniswapV2Pair.sol#L16
-    bytes4 private constant SELECTOR = bytes4(keccak256(bytes('transfer(address,uint256)')));
-
+    address constant public TREE = 0xCE222993A7E4818E0D12BC56376c5a60f92A5783;
+    address constant public RESERVE = 0x390a8Fb3fCFF0bB0fCf1F91c7E36db9c53165d17;
 
     IUniswapV2Router01 public router;
     address public tree;
@@ -51,10 +49,9 @@ contract Reserve2 {
 
     mapping(uint256 => Campaign) private campaigns;
  
-    constructor(address _router, address _tree, address _gov, address _charity) public {
-        router = IUniswapV2Router01(_router);
+    constructor(address _gov) public {
         gov = _gov;
-        charity = _charity;
+        router = IUniswapV2Router01(_router);
     }
 
     
@@ -64,26 +61,31 @@ contract Reserve2 {
         Campaign storage c = campaigns[numCampaigns];
         require(c.totalPledged >= amountIn, "Not enough DAI pledged. Rebase postponed.");
 
+        // transfer pledged DAI to reserve
         IERC20(DAI).increaseAllowance(address(this), c.totalPledged);
+        IERC20(DAI).transfer(RESERVE, c.totalPledged);
 
         // https://github.com/WhalerDAO/tree-contracts/blob/4525d20def8fce41985f0711e9b742a0f3c0d30b/contracts/TREEReserve.sol#L230
-        tree = address(path[0])
+        address tree = address(path[0]);
     
         // Send TREE to each pledger
-        for (uint i=1; i< c.numPledgers+1; i++) {
+        for (uint i=1; i<c.numPledgers+1; i++) {
             
-            // Calculate proportion of TREE to give to each address
             address pledger = c.pledgers[i];
-            uint256 valuePledged = c.amountsPledged[pledger];
+            uint256 amountPledged = c.amountsPledged[pledger];
 
             // treeToReceive = value pledged * (amountIn / totalPledged)
             // For example, if 100 DAI is pledged and there's only 50 TREE available
             // an address that pledged 5 DAI would receive 5 * (50/100) = 2.5 TREE
-            uint256 treeToReceive = valuePledged.mul(amountIn).div(c.totalPledged);
+            uint256 treeToReceive = amountPledged.mul(amountIn).div(c.totalPledged);
 
-            // TREE is already approved to transfer
+            // Only transfer to EOAs to prevent unexpected reverts if pledge was done using CREATE2
+            // note: TREE is already approved to transfer
             // https://github.com/WhalerDAO/tree-contracts/blob/4525d20def8fce41985f0711e9b742a0f3c0d30b/contracts/TREEReserve.sol#L228
-            IERC20(tree).transfer(pledger, treeToReceive);
+            if !Address.isContract(pledger) {
+                IERC20(TREE).transfer(pledger, treeToReceive);
+                c.treeSold = c.treeSold + treeToReceive;
+            }
         }
 
         numCampaigns++;
@@ -94,11 +96,13 @@ contract Reserve2 {
     }
 
 
-    function pledge(uint256 _amount) public payable returns (bool) {
-        Campaign storage c = campaigns[numCampaigns];
+    function pledge(uint256 _amount) external payable returns (bool) {
+        require(!Address.isContract(msg.sender), "Must pledge from EOA");
+        // Handle incoming DAI
+        require(IERC20(DAI).balanceOf(msg.sender) >= _amount, "Cannot pledge more DAI than held.")
+        IERC20(DAI).transferFrom(msg.sender, address(this), _amount);
 
-        // add value to total pledged
-        // TODO: handle incoming DAI
+        Campaign storage c = campaigns[numCampaigns];
         c.totalPledged = c.totalPledged + _amount;
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
@@ -112,13 +116,11 @@ contract Reserve2 {
             c.amountsPledged[msg.sender] = c.amountsPledged[msg.sender].add(_amount);
         }
 
-        // TODO: handle pledge token
-
         emit Pledge(numCampaigns, msg.sender, _amount);
 
     }
 
-    function unpledge(uint256 _amount) public payable {
+    function unpledge(uint256 _amount) external payable {
         Campaign storage c = campaigns[numCampaigns];
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
@@ -133,17 +135,17 @@ contract Reserve2 {
         emit Unpledge(numCampaigns, msg.sender, _amount);
     }
 
-    function reserveTransfer(address _token, address _to) public {
-        require(msg.sender == gov, "msg.sender is not gov");
+    function reserveTransfer(address _token, address _to) external {
+        require(msg.sender == gov, "UniswapRouter: not gov");
         amount = IERC20(_token).balanceOf(address(this));
         IERC20(_token).transfer(_to, amount);
         emit ReserveTransfer(_token, _to, amount);
     }
 
-    function getPledgerId(uint256 _numCampaign, address _addr) public returns (uint256) {
+    function getPledgerId(uint256 _numCampaign, address _addr) private returns (uint256 pledgerId) {
         Campaign storage c = campaigns[_numCampaign];
 
-        uint256 pledgerId;
+        pledgerId = 0;
         for (uint i=1; i < c.numPledgers+1; i++) {
             address pledger = c.pledgers[i];
             if (pledger == _addr) {
@@ -151,7 +153,6 @@ contract Reserve2 {
                 break;
             }
         }
-        return pledgerId;
     }
 
     function getCampaignTotalPledged(uint256 _numCampaign) public view returns (uint256) {
@@ -159,7 +160,17 @@ contract Reserve2 {
         return c.totalPledged;
     }
 
-    function getNumCampaigns() public view returns (uint256) {
+    function getPledgers(uint256 _numCampaign) external view returns ([]address calldata pledgers) {
+        Campaign storage c = campaigns[_numCampaign];
+        pledgers = c.pledgers;
+    }
+
+    function getPledgeAmount(uint256 _numCampaign, address _addr) external view returns (uint256) {
+        Campaign storage c = campaigns[_numCampaign];
+        return c.amountsPledged[_addr];
+    }
+
+    function getNumCampaigns() external view returns (uint256) {
         return numCampaigns;
     }
 }
