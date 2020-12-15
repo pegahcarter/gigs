@@ -1,4 +1,7 @@
 pragma solidity ^0.6.6;
+import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
 
 library SafeMath {
     /**
@@ -197,24 +200,35 @@ library Address {
     }
 }
 
-interface TokenLike {
-  function transferFrom(address from, address to, uint256 amount) external returns (bool);
-  function approve(address to, uint256 amount) external returns (bool);
-  function balanceOf(address to) external returns (uint);
-  function join(address to, uint256 amount) external;
-  function exit(address from, uint256 amount) external;
+
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
+
+interface IUniswapRouterv2Router01 {
+    function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] calldata path,address to,uint256 deadline) external returns (uint[] memory amounts);
 }
 
 contract Reserve2 {
     using SafeMath for uint256;
     using Address for address;
 
-    event Pledge(uint256 _numCampaign, address addr, uint256 _value);
-    event Unpledge(uint256 _numCampaign, address addr, uint256 _value);
+    event Pledge(uint256 _numCampaign, address _addr, uint256 _value);
+    event Unpledge(uint256 _numCampaign, address _addr, uint256 _value);
     event Rebase(uint256 _id);
+    event ReserveTransfer(address _to, uint256 _value);
 
     // https://github.com/dapphub/ds-dach/blob/49a3ccfd5d44415455441feeb2f5a39286b8de71/src/dach.sol
-    TokenLike public constant DAI = TokenLike(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+    IERC20 public constant dai = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+    IUniswapV2Router01 public router;
+    address public gov;
+    address public charity;
 
     struct Campaign {
         uint256 totalPledged;
@@ -227,17 +241,23 @@ contract Reserve2 {
     uint256 private numCampaigns = 1;
 
     mapping(uint256 => Campaign) private campaigns;
-
-    constructor() {
-        
+ 
+    constructor(address _router, address _gov, address _charity) public {
+        router = IUniswapV2Router01(_router);
+        gov = _gov;
+        charity = _charity;
     }
 
-    // TODO: override
-    function rebase(uint256 _treeSold) public payable {
+    
+    function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override returns (uint[] memory amounts) {
+        require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED');
+        
         Campaign storage c = campaigns[numCampaigns];
-        require(c.totalPledged >= _treeSold, "Not enough DAI pledged. Rebase postponed.");
+        require(c.totalPledged >= amountIn, "Not enough DAI pledged. Rebase postponed.");
     
         // Calculate proportion of TREE to give to each address
+
+        // Convert 
 
         // Send TREE to each pledger
 
@@ -283,6 +303,13 @@ contract Reserve2 {
         // TODO: handle unpledge token
 
         emit Unpledge(numCampaigns, msg.sender, _value);
+    }
+
+    function reserveTransfer(address _to) public {
+        require(msg.sender == gov, "msg.sender is not gov");
+        value = dai.balanceOf(address(this));
+        dai.transferFrom(address(this), _to, value);
+        emit ReserveTransfer(_to, value);
     }
 
     function getPledgerId(uint256 _numCampaign, address _addr) public returns (uint256) {
