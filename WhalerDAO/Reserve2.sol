@@ -12,7 +12,7 @@ interface IERC20 {
     function transfer(address recipient, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool)
+    function increaseAllowance(address spender, uint256 addedAmount) public virtual returns (bool)
 }
 
 interface IUniswapRouterv2Router01 {
@@ -22,10 +22,10 @@ interface IUniswapRouterv2Router01 {
 contract Reserve2 {
     using SafeMath for uint256;
 
-    event Pledge(uint256 _numCampaign, address _addr, uint256 _value);
-    event Unpledge(uint256 _numCampaign, address _addr, uint256 _value);
+    event Pledge(uint256 _numCampaign, address _addr, uint256 _amount);
+    event Unpledge(uint256 _numCampaign, address _addr, uint256 _amount);
     event Rebase(uint256 _id);
-    event ReserveTransfer(address _token, address _to, uint256 _value);
+    event ReserveTransfer(address _token, address _to, uint256 _amount);
 
     // https://github.com/dapphub/ds-dach/blob/49a3ccfd5d44415455441feeb2f5a39286b8de71/src/dach.sol
     address constant public DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
@@ -44,7 +44,7 @@ contract Reserve2 {
         uint256 numPledgers;
         uint256 treeSold;
         mapping (uint256 => address) pledgers;
-        mapping (address => uint256) valuesPledged;
+        mapping (address => uint256) amountsPledged;
     }
 
     uint256 private numCampaigns = 1;
@@ -60,7 +60,6 @@ contract Reserve2 {
     
     function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override returns (uint256[] memory amounts) {
         require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED');
-        require(address(path[1]) == DAI, "Change reserveToken in reserve to DAI");
 
         Campaign storage c = campaigns[numCampaigns];
         require(c.totalPledged >= amountIn, "Not enough DAI pledged. Rebase postponed.");
@@ -75,7 +74,7 @@ contract Reserve2 {
             
             // Calculate proportion of TREE to give to each address
             address pledger = c.pledgers[i];
-            uint256 valuePledged = c.valuesPledged[pledger];
+            uint256 valuePledged = c.amountsPledged[pledger];
 
             // treeToReceive = value pledged * (amountIn / totalPledged)
             // For example, if 100 DAI is pledged and there's only 50 TREE available
@@ -95,50 +94,50 @@ contract Reserve2 {
     }
 
 
-    function pledge(uint256 _value) public payable returns (bool) {
+    function pledge(uint256 _amount) public payable returns (bool) {
         Campaign storage c = campaigns[numCampaigns];
 
         // add value to total pledged
         // TODO: handle incoming DAI
-        c.totalPledged = c.totalPledged + _value;
+        c.totalPledged = c.totalPledged + _amount;
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
         if (pledgerId == 0) {
             // user has not pledged before
             pledgerId = c.numPledgers++;
             c.pledgers[pledgerId] = msg.sender;
-            c.valuesPledged[msg.sender] = _value;
+            c.amountsPledged[msg.sender] = _amount;
         } else {
             // user has pledged before, add to their total pledged
-            c.valuesPledged[msg.sender] = c.valuesPledged[msg.sender].add(_value);
+            c.amountsPledged[msg.sender] = c.amountsPledged[msg.sender].add(_amount);
         }
 
         // TODO: handle pledge token
 
-        emit Pledge(numCampaigns, msg.sender, _value);
+        emit Pledge(numCampaigns, msg.sender, _amount);
 
     }
 
-    function unpledge(uint256 _value) public payable {
+    function unpledge(uint256 _amount) public payable {
         Campaign storage c = campaigns[numCampaigns];
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
         require(pledgerId != 0, "User has not pledged.");
-        require(_value <= c.valuesPledged[msg.sender], "Cannot unpledge more than already pledged.");
+        require(_amount <= c.amountsPledged[msg.sender], "Cannot unpledge more than already pledged.");
 
-        c.totalPledged = c.totalPledged.sub(_value);
-        c.valuesPledged[msg.sender] = c.valuesPledged.sub(_value);
+        c.totalPledged = c.totalPledged.sub(_amount);
+        c.amountsPledged[msg.sender] = c.amountsPledged.sub(_amount);
 
         // TODO: handle unpledge token
 
-        emit Unpledge(numCampaigns, msg.sender, _value);
+        emit Unpledge(numCampaigns, msg.sender, _amount);
     }
 
     function reserveTransfer(address _token, address _to) public {
         require(msg.sender == gov, "msg.sender is not gov");
-        value = IERC20(_token).balanceOf(address(this));
-        IERC20(_token).transfer(_to, value);
-        emit ReserveTransfer(_token, _to, value);
+        amount = IERC20(_token).balanceOf(address(this));
+        IERC20(_token).transfer(_to, amount);
+        emit ReserveTransfer(_token, _to, amount);
     }
 
     function getPledgerId(uint256 _numCampaign, address _addr) public returns (uint256) {
@@ -153,12 +152,6 @@ contract Reserve2 {
             }
         }
         return pledgerId;
-    }
-
-    function calculateRewardRatio(uint256 _numCampaign) public returns (uint256) {
-        Campaign storage c = campaigns[_numCampaign];
-        // require(c.treeSold != 0, "Rebase has not occured.");
-        // TODO
     }
 
     function getCampaignTotalPledged(uint256 _numCampaign) public view returns (uint256) {
