@@ -2,6 +2,8 @@ pragma solidity ^0.6.6;
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
 
+// TODO: will need to update uniswapPair in TREEReserve to reflect TREE/DAI
+
 
 interface IERC20 {
     function totalSupply() external view returns (uint256);
@@ -10,6 +12,7 @@ interface IERC20 {
     function transfer(address recipient, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool)
 }
 
 interface IUniswapRouterv2Router01 {
@@ -22,11 +25,17 @@ contract Reserve2 {
     event Pledge(uint256 _numCampaign, address _addr, uint256 _value);
     event Unpledge(uint256 _numCampaign, address _addr, uint256 _value);
     event Rebase(uint256 _id);
-    event ReserveTransfer(address _to, uint256 _value);
+    event ReserveTransfer(address _token, address _to, uint256 _value);
 
     // https://github.com/dapphub/ds-dach/blob/49a3ccfd5d44415455441feeb2f5a39286b8de71/src/dach.sol
-    IERC20 public constant dai = IERC20(0x6B175474E89094C44Da98b954EedeAC495271d0F);
+    address constant public DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+
+    // https://github.com/Uniswap/uniswap-v2-core/blob/4dd59067c76dea4a0e8e4bfdda41877a6b16dedc/contracts/UniswapV2Pair.sol#L16
+    bytes4 private constant SELECTOR = bytes4(keccak256(bytes('transfer(address,uint256)')));
+
+
     IUniswapV2Router01 public router;
+    address public tree;
     address public gov;
     address public charity;
 
@@ -42,35 +51,55 @@ contract Reserve2 {
 
     mapping(uint256 => Campaign) private campaigns;
  
-    constructor(address _router, address _gov, address _charity) public {
+    constructor(address _router, address _tree, address _gov, address _charity) public {
         router = IUniswapV2Router01(_router);
         gov = _gov;
         charity = _charity;
     }
 
     
-    function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override returns (uint[] memory amounts) {
+    function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override returns (uint256[] memory amounts) {
         require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED');
-        
+        require(address(path[1]) == DAI, "Change reserveToken in reserve to DAI");
+
         Campaign storage c = campaigns[numCampaigns];
         require(c.totalPledged >= amountIn, "Not enough DAI pledged. Rebase postponed.");
+
+        IERC20(DAI).increaseAllowance(address(this), c.totalPledged);
+
+        // https://github.com/WhalerDAO/tree-contracts/blob/4525d20def8fce41985f0711e9b742a0f3c0d30b/contracts/TREEReserve.sol#L230
+        tree = address(path[0])
     
-        // Calculate proportion of TREE to give to each address
-
-        // Convert 
-
         // Send TREE to each pledger
+        for (uint i=1; i< c.numPledgers+1; i++) {
+            
+            // Calculate proportion of TREE to give to each address
+            address pledger = c.pledgers[i];
+            uint256 valuePledged = c.valuesPledged[pledger];
 
-        // increment numCampaigns
+            // treeToReceive = value pledged * (amountIn / totalPledged)
+            // For example, if 100 DAI is pledged and there's only 50 TREE available
+            // an address that pledged 5 DAI would receive 5 * (50/100) = 2.5 TREE
+            uint256 treeToReceive = valuePledged.mul(amountIn).div(c.totalPledged);
+
+            // TREE is already approved to transfer
+            // https://github.com/WhalerDAO/tree-contracts/blob/4525d20def8fce41985f0711e9b742a0f3c0d30b/contracts/TREEReserve.sol#L228
+            IERC20(tree).transfer(pledger, treeToReceive);
+        }
+
         numCampaigns++;
-    }
 
+        uint256[] memory amounts = new uint256[](2);
+        amounts[0] = amountIn;
+        amounts[1] = c.totalPledged;
+    }
 
 
     function pledge(uint256 _value) public payable returns (bool) {
         Campaign storage c = campaigns[numCampaigns];
 
         // add value to total pledged
+        // TODO: handle incoming DAI
         c.totalPledged = c.totalPledged + _value;
 
         uint256 pledgerId = getPledgerId(numCampaigns, msg.sender);
@@ -80,11 +109,11 @@ contract Reserve2 {
             c.pledgers[pledgerId] = msg.sender;
             c.valuesPledged[msg.sender] = _value;
         } else {
-            // user has pledged before
+            // user has pledged before, add to their total pledged
             c.valuesPledged[msg.sender] = c.valuesPledged[msg.sender].add(_value);
         }
 
-        // TODO: handle plege token
+        // TODO: handle pledge token
 
         emit Pledge(numCampaigns, msg.sender, _value);
 
@@ -105,11 +134,11 @@ contract Reserve2 {
         emit Unpledge(numCampaigns, msg.sender, _value);
     }
 
-    function reserveTransfer(address _to) public {
+    function reserveTransfer(address _token, address _to) public {
         require(msg.sender == gov, "msg.sender is not gov");
-        value = dai.balanceOf(address(this));
-        dai.transferFrom(address(this), _to, value);
-        emit ReserveTransfer(_to, value);
+        value = IERC20(_token).balanceOf(address(this));
+        IERC20(_token).transfer(_to, value);
+        emit ReserveTransfer(_token, _to, value);
     }
 
     function getPledgerId(uint256 _numCampaign, address _addr) public returns (uint256) {
@@ -128,7 +157,7 @@ contract Reserve2 {
 
     function calculateRewardRatio(uint256 _numCampaign) public returns (uint256) {
         Campaign storage c = campaigns[_numCampaign];
-        require(c.treeSold != 0, "Rebase has not occured.");
+        // require(c.treeSold != 0, "Rebase has not occured.");
         // TODO
     }
 
