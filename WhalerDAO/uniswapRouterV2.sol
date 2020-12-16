@@ -18,6 +18,7 @@ contract uniswapRouterV2 {
     event Unpledge(uint256 numCampaign, address addr, uint256 amount);
     event Rebase(uint256 numCampaign, treeSold, reserveTokenReceived);
     event WithdrawToken(address token, address to, uint256 amount);
+    event SetReserveToken(address token);
 
     address constant private TREE = 0xCE222993A7E4818E0D12BC56376c5a60f92A5783;
     address constant private RESERVE = 0x390a8Fb3fCFF0bB0fCf1F91c7E36db9c53165d17;
@@ -149,6 +150,7 @@ contract uniswapRouterV2 {
     function setReserveToken(address _newToken) external {
         require(msg.sender == gov, "UniswapRouter: not gov");
         reserveToken = IERC20(_newToken);
+        emit SetReserveToken(_newToken);
     }
 
 
