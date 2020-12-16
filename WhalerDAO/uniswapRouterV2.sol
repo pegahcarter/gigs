@@ -1,32 +1,23 @@
 pragma solidity ^0.6.6;
-import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-// TODO: will need to update uniswapPair in TREEReserve to reflect TREE/DAI
-
 
 interface IERC20 {
-    function totalSupply() external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
-    function allowance(address owner, address spender) external view returns (uint256);
     function transfer(address recipient, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function increaseAllowance(address spender, uint256 addedAmount) public virtual returns (bool)
+    function increaseAllowance(address spender, uint256 addedAmount) public virtual returns (bool);
 }
 
-interface IUniswapRouterv2Router01 {
-    function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] calldata path,address to,uint256 deadline) external returns (uint[] memory amounts);
-}
 
 contract uniswapRouterV2 {
     using SafeMath for uint256;
 
-    event Pledge(uint256 _numCampaign, address _addr, uint256 _amount);
-    event Unpledge(uint256 _numCampaign, address _addr, uint256 _amount);
-    event Rebase(uint256 _id);
-    event WithdrawToken(address _token, address _to, uint256 _amount);
+    event Pledge(uint256 numCampaign, address addr, uint256 amount);
+    event Unpledge(uint256 numCampaign, address addr, uint256 amount);
+    event Rebase(uint256 numCampaign, treeSold, reserveTokenReceived);
+    event WithdrawToken(address token, address to, uint256 amount);
 
     address constant private TREE = 0xCE222993A7E4818E0D12BC56376c5a60f92A5783;
     address constant private RESERVE = 0x390a8Fb3fCFF0bB0fCf1F91c7E36db9c53165d17;
@@ -52,7 +43,8 @@ contract uniswapRouterV2 {
         gov = _gov;
     }
 
-    function pledge(uint256 _amount, bool max) external payable returns (bool) {
+
+    function pledge(uint256 _amount, bool max) external payable {
         require(!Address.isContract(msg.sender), "Must pledge from EOA");
         if (max) {_amount = reserveToken.balanceOf(msg.sender);}
         require(_amount > 0, "Must pledge more than 0.");
@@ -94,7 +86,13 @@ contract uniswapRouterV2 {
     }
 
 
-    function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override returns (uint256[] memory amounts) {
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external override returns (uint256[] memory amounts) {
         require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED');
 
         Campaign storage c = campaigns[numCampaigns];
@@ -128,8 +126,10 @@ contract uniswapRouterV2 {
 
         // Return amounts based on https://github.com/WhalerDAO/tree-contracts/blob/4525d20def8fce41985f0711e9b742a0f3c0d30b/contracts/TREEReserve.sol#L217
         uint256[] memory amounts = new uint256[](2);
-        amounts[0] = amountIn;
+        amounts[0] = c.treeSold;
         amounts[1] = c.totalPledged;
+
+        emit Rebase(numCampaigns-1, c.treeSold, c.totalPledged);
     }
 
 
